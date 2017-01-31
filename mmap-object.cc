@@ -153,10 +153,10 @@ public:
   
 private:
   string file_name;
-  size_t file_size;
   size_t max_file_size;
   bip::managed_mapped_file *map_seg;
   PropertyHash *property_map;
+  size_t initial_bucket_count;
   bool readonly;
   bool writeonly;
   bool closed;
@@ -599,8 +599,9 @@ NAN_METHOD(SharedMapControl::Open) {
   d->readonly = string(*mode) == "ro";
   d->writeonly = string(*mode) == "wo";
   d->reify_mutexes(); // Get these set up before proceeding.
+  d->max_file_size = max_file_size;
+  d->initial_bucket_count = initial_bucket_count;
   
-  bool createFile = false;
   struct stat buf;
 
   // So we don't try to double-create the file.
@@ -626,7 +627,6 @@ NAN_METHOD(SharedMapControl::Open) {
       Nan::ThrowError(error_stream.str().c_str());
       return;
     }      
-    createFile = true;
   }
   // Does something else have this held in WO?
   if (!d->mutexes->wo_mutex.timed_lock_sharable(boost::get_system_time() + boost::posix_time::seconds(1))) {
@@ -643,36 +643,22 @@ NAN_METHOD(SharedMapControl::Open) {
   SharedMapControl *c = new SharedMapControl(d);
 
   try {
-    if (createFile) {
-      d->map_seg = new bip::managed_mapped_file(bip::create_only, string(*filename).c_str(), initial_file_size);
-      d->property_map = d->map_seg->find_or_construct<PropertyHash>("properties")
-        (initial_bucket_count, hasher(), s_equal_to(), d->map_seg->get_segment_manager());
-      d->file_size = initial_file_size;
-      d->max_file_size = max_file_size;
-      d->map_seg->flush();
-    } else {
-      if (d->readonly) {
-        d->map_seg = new bip::managed_mapped_file(bip::open_read_only, string(*filename).c_str());
-      } else {
-        d->map_seg = new bip::managed_mapped_file(bip::open_only, string(*filename).c_str());
-      }
-      if (d->map_seg->get_size() != (unsigned long)buf.st_size) {
-        ostringstream error_stream;
-        error_stream << "File " << *filename << " appears to be corrupt (1).";
-        Nan::ThrowError(error_stream.str().c_str());
-        return;
-      }
-      auto find_map = d->map_seg->find<PropertyHash>("properties");
-      d->property_map = find_map.first;
-      if (d->property_map == NULL) {
-        ostringstream error_stream;
-        error_stream << "File " << *filename << " appears to be corrupt (2).";
-        Nan::ThrowError(error_stream.str().c_str());
-        return;
-      }
-      d->file_size = d->map_seg->get_size();
-      d->max_file_size = max_file_size;
+    d->map_seg = new bip::managed_mapped_file(bip::open_or_create, string(*filename).c_str(), initial_file_size);
+    if (d->map_seg->get_size() != (unsigned long)buf.st_size) {
+      ostringstream error_stream;
+      error_stream << "File " << *filename << " appears to be corrupt (1).";
+      Nan::ThrowError(error_stream.str().c_str());
+      return;
     }
+    d->property_map = d->map_seg->find_or_construct<PropertyHash>("properties")
+      (initial_bucket_count, hasher(), s_equal_to(), d->map_seg->get_segment_manager());
+    if (d->property_map == NULL) {
+      ostringstream error_stream;
+      error_stream << "File " << *filename << " appears to be corrupt (2).";
+      Nan::ThrowError(error_stream.str().c_str());
+      return;
+    }
+    d->map_seg->flush();
   } catch(bip::interprocess_exception &ex){
     ostringstream error_stream;
     error_stream << "Can't open file " << *filename << ": " << ex.what();
@@ -687,7 +673,6 @@ NAN_METHOD(SharedMapControl::Open) {
   auto ret_obj = Nan::New<v8::Object>();
   Nan::Set(ret_obj, Nan::New("control").ToLocalChecked(), info.This());
   Nan::Set(ret_obj, Nan::New("obj").ToLocalChecked(), map_obj);
-    
   info.GetReturnValue().Set(ret_obj);
 }
 
@@ -703,6 +688,7 @@ bool SharedMap::grow(size_t size) {
   }
   if (size < 100)
     size = 100;
+  auto file_size = map_seg->get_size();
   file_size += size;
   if (file_size > max_file_size) {
     Nan::ThrowError("File grew too large.");
