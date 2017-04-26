@@ -321,6 +321,7 @@ describe('mmap-object', function () {
     })
 
     it('throws exception on bad file', function () {
+      if (os.platform() !== 'linux') return this.skip()
       expect(function () {
         const obj = new MmapObject.Open(path.join(__dirname,'badfile.bin'))
         expect(obj).to.not.exist
@@ -328,6 +329,7 @@ describe('mmap-object', function () {
     })
 
     it('throws exception on another bad file', function () {
+      if (os.platform() !== 'linux') return this.skip()
       expect(function () {
         const obj = new MmapObject.Open(path.join(__dirname,'badfile2.bin'))
         expect(obj).to.not.exist
