@@ -496,6 +496,7 @@ describe('mmap-object', function () {
       this.shobj.control.close()
     })
     it('works across multiple processes', function (done) {
+      this.timeout(5000)
       let children = []
       const CHILDCOUNT = 10
       for (let i = 0; i < CHILDCOUNT; i++) {

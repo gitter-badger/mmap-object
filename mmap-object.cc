@@ -572,9 +572,10 @@ bool SharedMap::reify_mutexes(uint64_t base_address) {
   }
   try {
     shm = bip::shared_memory_object(bip::open_only, mutex_name.c_str(), bip::read_write);
+    shm.truncate(sizeof(Mutexes));
 #ifdef __APPLE__
     try {
-      mutex_region = bip::mapped_region(shm, bip::read_write, 0, 0, (void*)base_address);
+      mutex_region = bip::mapped_region(shm, bip::read_write, 0, sizeof(Mutexes), (void*)base_address);
     } catch(bip::interprocess_exception &ex){
       ostringstream error_stream;
       error_stream << "mmap failure: " << ex.what();
@@ -589,10 +590,10 @@ bool SharedMap::reify_mutexes(uint64_t base_address) {
     if (ex.get_error_code() == 7) { // Need to create the region
       bip::shared_memory_object::remove(mutex_name.c_str());
       shm = bip::shared_memory_object(bip::create_only, mutex_name.c_str(), bip::read_write);
-      shm.truncate(sizeof (Mutexes));
+      shm.truncate(sizeof(Mutexes));
 #ifdef __APPLE__
       try {
-        mutex_region = bip::mapped_region(shm, bip::read_write, 0, 0, (void*)base_address);
+        mutex_region = bip::mapped_region(shm, bip::read_write, 0, sizeof(Mutexes), (void*)base_address);
       } catch(bip::interprocess_exception &ex){
         ostringstream error_stream;
         error_stream << "mmap failure: " << ex.what();
@@ -685,11 +686,10 @@ NAN_METHOD(SharedMapControl::Open) {
   d->max_file_size = max_file_size;
   d->initial_bucket_count = initial_bucket_count;
   struct stat buf;
-  
   { // Mutex scope
     bip::scoped_lock<upgradable_mutex_type> lock(d->mutexes->global_mutex);
-    int s = stat(*filename, &buf);
-    if (s == 0) {
+    int stat_result = stat(*filename, &buf);
+    if (stat_result == 0) {
       if (!S_ISREG(buf.st_mode)) {
         ostringstream error_stream;
         error_stream << *filename << " is not a regular file.";
@@ -725,10 +725,9 @@ NAN_METHOD(SharedMapControl::Open) {
     }
   
     SharedMapControl *c = new SharedMapControl(d);
-
     try {
       d->map_seg = new bip::managed_mapped_file(bip::open_or_create, string(*filename).c_str(), initial_file_size);
-      if (d->map_seg->get_size() != (unsigned long)buf.st_size) {
+      if (stat_result == 0 && d->map_seg->get_size() != (unsigned long)buf.st_size) {
         ostringstream error_stream;
         error_stream << "File " << *filename << " appears to be corrupt (1).";
         Nan::ThrowError(error_stream.str().c_str());
