@@ -687,7 +687,7 @@ NAN_METHOD(SharedMapControl::Open) {
   d->initial_bucket_count = initial_bucket_count;
   struct stat buf;
   { // Mutex scope
-    bip::scoped_lock<upgradable_mutex_type> lock(d->mutexes->global_mutex);
+    bip::sharable_lock<upgradable_mutex_type> lock(d->mutexes->global_mutex);
     int stat_result = stat(*filename, &buf);
     if (stat_result == 0) {
       if (!S_ISREG(buf.st_mode)) {
@@ -800,23 +800,16 @@ struct CloseWorker : public Nan::AsyncWorker {
   bip::managed_mapped_file *map_seg;
   string file_name;
   upgradable_mutex_type *wo_mutex;
-  upgradable_mutex_type *global_mutex;
   bool writeonly;
   bip::mapped_region *mutex_region;
   CloseWorker(Nan::Callback *callback, bip::managed_mapped_file *map_seg,
               string file_name, upgradable_mutex_type *wo_mutex,
-              upgradable_mutex_type *global_mutex, bool writeonly,
-              bip::mapped_region *mutex_region) :
+              bool writeonly, bip::mapped_region *mutex_region) :
     AsyncWorker(callback), map_seg(map_seg), file_name(file_name),
-    wo_mutex(wo_mutex), global_mutex(global_mutex), writeonly(writeonly),
-    mutex_region(mutex_region) {}
+    wo_mutex(wo_mutex), writeonly(writeonly), mutex_region(mutex_region) {}
   virtual void Execute() { // May run in a separate thread
     {
       LOCKINFO("CLOSE");
-      bip::scoped_lock<upgradable_mutex_type> lock(*global_mutex);
-      BOOST_SCOPE_EXIT(void) {
-        UNLOCKINFO("CLOSE");
-      } BOOST_SCOPE_EXIT_END;
       if (writeonly) {
         bip::managed_mapped_file::shrink_to_fit(file_name.c_str());
       }
@@ -840,8 +833,8 @@ NAN_METHOD(SharedMapControl::Close) {
     return;
   auto callback = new Nan::Callback(info[0].As<v8::Function>());
   auto closer = new CloseWorker(callback, self->map->map_seg, self->map->file_name,
-                                &self->map->mutexes->wo_mutex, &self->map->mutexes->global_mutex,
-                                self->map->writeonly, &self->map->mutex_region);
+                                &self->map->mutexes->wo_mutex, self->map->writeonly,
+                                &self->map->mutex_region);
 
   if (info[0]->IsFunction()) { // Close asynchronously
     if (self->map->closed) {
