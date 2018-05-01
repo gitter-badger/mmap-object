@@ -70,6 +70,10 @@ public:
   Cell(const char *value, char_allocator allocator) : cell_type(STRING_TYPE), cell_value(value, allocator) {}
   Cell(const double value) : cell_type(NUMBER_TYPE), cell_value(value) {}
   Cell(const Cell &cell);
+  ~Cell() {
+    if (cell_type == STRING_TYPE)
+      cell_value.string_value.~shared_string();
+  }
   char type() { return cell_type; }
   const char *c_str();
   operator string();
@@ -233,17 +237,17 @@ NAN_PROPERTY_SETTER(SharedMap::PropSetter) {
   size_t data_length = sizeof(Cell);
 
   try {
-    Cell *c;
+    unique_ptr<Cell> c;
     while(true) {
       try {
         if (value->IsString()) {
           v8::String::Utf8Value data(value);
           data_length += data.length();
           char_allocator allocer(self->map_seg->get_segment_manager());
-          c = new Cell(string(*data).c_str(), allocer);
+          c.reset(new Cell(string(*data).c_str(), allocer));
         } else if (value->IsNumber()) {
           data_length += sizeof(double);
-          c = new Cell(Nan::To<double>(value).FromJust());
+          c.reset(new Cell(Nan::To<double>(value).FromJust()));
         } else {
           Nan::ThrowError("Value must be a string or number.");
           return;
@@ -251,9 +255,8 @@ NAN_PROPERTY_SETTER(SharedMap::PropSetter) {
 
         v8::String::Utf8Value prop(property);
         data_length += prop.length();
-        shared_string *string_key;
         char_allocator allocer(self->map_seg->get_segment_manager());
-        string_key = new shared_string(string(*prop).c_str(), allocer);
+        unique_ptr<shared_string> string_key(new shared_string(string(*prop).c_str(), allocer));
         auto pair = self->property_map->insert({ *string_key, *c });
         if (!pair.second) {
           self->property_map->erase(*string_key);
@@ -451,7 +454,7 @@ NAN_METHOD(SharedMap::Create) {
   SharedMap *d = new SharedMap(*filename, file_size, max_file_size);
 
   try {
-    d->map_seg = new bip::managed_mapped_file(bip::open_or_create,string(*filename).c_str(), file_size);
+    d->map_seg = new bip::managed_mapped_file(bip::open_or_create, string(*filename).c_str(), file_size);
     d->property_map = d->map_seg->find_or_construct<PropertyHash>("properties")
       (initial_bucket_count, hasher(), s_equal_to(), d->map_seg->get_segment_manager());
     d->closed = false;
